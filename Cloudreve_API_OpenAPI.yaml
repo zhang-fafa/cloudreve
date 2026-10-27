@@ -1,0 +1,2017 @@
+openapi: 3.0.3
+info:
+  title: Cloudreve v4 REST API
+  version: "4.0.0"
+  description: |
+    Cloudreve 是一个开源云存储/网盘后端系统。本规范基于 Cloudreve v4 源码自动整理。
+    
+    - **基础路径**: `/api/v4`
+    - **所有 ID** 均为 HashID 编码（字符串），不是数字
+    - **鉴权方式**: JWT Bearer Token / Session Cookie / HMAC Sign
+    
+    更多信息见: https://github.com/cloudreve/Cloudreve
+servers:
+  - url: https://your-cloudreve-site.com/api/v4
+    description: 替换为你的 Cloudreve 服务器地址
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        使用 `/session/token` 接口登录后获取的 access_token。
+        Header: `Authorization: Bearer <token>`
+    SessionAuth:
+      type: apiKey
+      in: cookie
+      name: session
+    BasicAuth:
+      type: http
+      scheme: basic
+      description: WebDAV Basic Auth，用户名 + WebDAV 密码
+
+  schemas:
+    Response:
+      type: object
+      properties:
+        code:
+          type: integer
+          description: 0=成功，非0=错误码
+        msg:
+          type: string
+        data:
+          nullable: true
+        error:
+          type: string
+          description: 底层错误详情（仅开发模式）
+        correlation_id:
+          type: string
+          format: uuid
+      example:
+        code: 0
+        msg: ""
+        data: {}
+
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          example: 40021
+        msg:
+          type: string
+          example: "User not found"
+        error:
+          type: string
+          example: "sql: no rows"
+        correlation_id:
+          type: string
+          format: uuid
+
+    Token:
+      type: object
+      properties:
+        access_token:
+          type: string
+          example: "eyJhbGciOiJIUzI1NiIs..."
+        refresh_token:
+          type: string
+          example: "dGhpcyBpcyBhIHJlZnJl..."
+        access_expires:
+          type: string
+          format: date-time
+        refresh_expires:
+          type: string
+          format: date-time
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          description: HashID 编码的用户 ID
+        email:
+          type: string
+          format: email
+        nick:
+          type: string
+        avatar:
+          type: string
+          format: url
+        status:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    BuiltinLoginResponse:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        token:
+          $ref: '#/components/schemas/Token'
+
+    FileResponse:
+      type: object
+      properties:
+        type:
+          type: integer
+          description: 1=文件, 2=目录
+        id:
+          type: string
+          description: HashID 编码的文件 ID
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        size:
+          type: integer
+          format: int64
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+        path:
+          type: string
+          description: 文件 URI 路径
+        shared:
+          type: boolean
+        owned:
+          type: boolean
+        primary_entity:
+          type: string
+
+    ListResponse:
+      type: object
+      properties:
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileResponse'
+        parent:
+          $ref: '#/components/schemas/FileResponse'
+        pagination:
+          type: object
+          properties:
+            total:
+              type: integer
+            page:
+              type: integer
+            page_size:
+              type: integer
+        context_hint:
+          type: string
+          format: uuid
+          description: 后续请求的上下文提示
+        mixed_type:
+          type: boolean
+
+    StoragePolicy:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+        max_size:
+          type: integer
+          format: int64
+        allowed_suffix:
+          type: array
+          items:
+            type: string
+        denied_suffix:
+          type: array
+          items:
+            type: string
+        encryption:
+          type: boolean
+        chunk_concurrency:
+          type: integer
+
+    UploadSessionResponse:
+      type: object
+      properties:
+        session_id:
+          type: string
+        upload_id:
+          type: string
+        chunk_size:
+          type: integer
+          format: int64
+        expires:
+          type: integer
+          format: int64
+          description: Unix 时间戳
+        upload_urls:
+          type: array
+          items:
+            type: string
+        credential:
+          type: string
+        ak:
+          type: string
+        uri:
+          type: string
+        callback_secret:
+          type: string
+        mime_type:
+          type: string
+        storage_policy:
+          $ref: '#/components/schemas/StoragePolicy'
+
+    Share:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        url:
+          type: string
+          format: url
+        visited:
+          type: integer
+        downloaded:
+          type: integer
+        expired:
+          type: boolean
+        unlocked:
+          type: boolean
+        password_protected:
+          type: boolean
+        source_uri:
+          type: string
+        expires:
+          type: string
+          format: date-time
+        size:
+          type: integer
+          format: int64
+
+    FileURLResponse:
+      type: object
+      properties:
+        urls:
+          type: array
+          items:
+            type: object
+            properties:
+              url:
+                type: string
+                format: url
+              entity_id:
+                type: string
+        expires:
+          type: string
+          format: date-time
+
+security:
+  - BearerAuth: []
+
+paths:
+  # ============ 站点 ============
+  /site/ping:
+    get:
+      tags: [站点]
+      summary: 健康检查
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Response'
+
+  /site/captcha:
+    get:
+      tags: [站点]
+      summary: 获取验证码图片
+      responses:
+        '200':
+          description: 验证码图片
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+
+  /site/config/{section}:
+    get:
+      tags: [站点]
+      summary: 获取站点配置
+      parameters:
+        - in: path
+          name: section
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 站点配置 JSON
+
+  # ============ 鉴权 ============
+  /session/prepare:
+    get:
+      tags: [鉴权]
+      summary: 登录预检查（返回用户是否支持密码/WebAuthn）
+      parameters:
+        - in: query
+          name: email
+          required: true
+          schema:
+            type: string
+            format: email
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Response'
+
+  /session/token:
+    post:
+      tags: [鉴权]
+      summary: 用户登录获取 Token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 4
+                  maxLength: 128
+      responses:
+        '200':
+          description: |
+            code=0: 登录成功，返回 Token 对
+            code=203: 需要 2FA，data 为 2FA 会话 ID
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Response'
+                  - properties:
+                      data:
+                        oneOf:
+                          - $ref: '#/components/schemas/BuiltinLoginResponse'
+                          - type: string
+                            description: 2FA 会话 ID
+
+    delete:
+      tags: [鉴权]
+      summary: 退出登录（撤销 Refresh Token）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        '200':
+          description: OK
+
+  /session/token/2fa:
+    post:
+      tags: [鉴权]
+      summary: 两步验证
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [otp, session_id]
+              properties:
+                otp:
+                  type: string
+                  description: TOTP 6 位验证码
+                session_id:
+                  type: string
+                  description: 登录接口返回的 2FA 会话 ID
+      responses:
+        '200':
+          description: 成功返回 Token 对
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Response'
+
+  /session/token/refresh:
+    post:
+      tags: [鉴权]
+      summary: 刷新 Token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+      responses:
+        '200':
+          description: 新的 Token 对
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Response'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/Token'
+
+  /session/authn:
+    put:
+      tags: [鉴权]
+      summary: WebAuthn 登录准备
+      security: []
+      responses:
+        '200':
+          description: WebAuthn PublicKeyCredentialRequestOptions
+    post:
+      tags: [鉴权]
+      summary: WebAuthn 登录完成
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 成功返回 Token 对
+
+  # ============ 用户 ============
+  /user:
+    post:
+      tags: [用户]
+      summary: 用户注册
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 6
+                language:
+                  type: string
+      responses:
+        '200':
+          description: 注册结果
+
+  /user/reset:
+    post:
+      tags: [用户]
+      summary: 发送密码重置邮件
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+                language:
+                  type: string
+      responses:
+        '200':
+          description: OK
+
+  /user/reset/{id}:
+    patch:
+      tags: [用户]
+      summary: 重置密码
+      security: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password, secret]
+              properties:
+                password:
+                  type: string
+                  minLength: 6
+                secret:
+                  type: string
+      responses:
+        '200':
+          description: OK
+
+  /user/activate/{id}:
+    get:
+      tags: [用户]
+      summary: 邮件激活账户
+      security: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 激活结果
+
+  /user/info/{id}:
+    get:
+      tags: [用户]
+      summary: 获取用户公开信息
+      security: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 用户信息
+
+  /user/avatar/{id}:
+    get:
+      tags: [用户]
+      summary: 获取用户头像
+      security: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 头像图片
+
+  # ============ 需登录用户信息 ============
+  /auth/user/me:
+    get:
+      tags: [用户]
+      summary: 获取当前登录用户信息
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 当前用户信息
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Response'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/User'
+
+  /auth/user/capacity:
+    get:
+      tags: [用户]
+      summary: 获取存储容量使用情况
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 存储容量信息
+
+  /auth/user/setting:
+    get:
+      tags: [用户]
+      summary: 获取用户个人设置
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 用户设置
+    patch:
+      tags: [用户]
+      summary: 修改用户设置
+      security:
+        - BearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                nick:
+                  type: string
+                language:
+                  type: string
+                theme:
+                  type: string
+      responses:
+        '200':
+          description: OK
+
+  /auth/user/setting/2fa:
+    get:
+      tags: [用户]
+      summary: 初始化二步验证
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 返回 TOTP secret 和 QR 码
+
+  # ============ 文件操作 ============
+  /file:
+    get:
+      tags: [文件]
+      summary: 列出目录文件
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: uri
+          required: true
+          schema:
+            type: string
+          description: 目录 URI，根目录为 `/`
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 0
+        - in: query
+          name: page_size
+          schema:
+            type: integer
+        - in: query
+          name: order_by
+          schema:
+            type: string
+        - in: query
+          name: order_direction
+          schema:
+            type: string
+            enum: [asc, desc]
+      responses:
+        '200':
+          description: 文件列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Response'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/ListResponse'
+
+    delete:
+      tags: [文件]
+      summary: 删除文件（到回收站）
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uris]
+              properties:
+                uris:
+                  type: array
+                  items:
+                    type: string
+                unlink:
+                  type: boolean
+                  description: 物理删除
+                skip_soft_delete:
+                  type: boolean
+      responses:
+        '200':
+          description: OK
+
+  /file/info:
+    get:
+      tags: [文件]
+      summary: 获取文件/目录信息
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: uri
+          schema:
+            type: string
+          description: 文件 URI（与 id 二选一）
+        - in: query
+          name: id
+          schema:
+            type: string
+          description: HashID 编码的文件 ID
+        - in: query
+          name: extended
+          schema:
+            type: boolean
+          description: 返回扩展信息
+        - in: query
+          name: folder_summary
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: 文件详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Response'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/FileResponse'
+
+  /file/create:
+    post:
+      tags: [文件]
+      summary: 创建空白文件或目录
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uri, type]
+              properties:
+                uri:
+                  type: string
+                type:
+                  type: string
+                  enum: [file, folder]
+                metadata:
+                  type: object
+                  additionalProperties:
+                    type: string
+                err_on_conflict:
+                  type: boolean
+      responses:
+        '200':
+          description: 创建结果
+
+  /file/rename:
+    post:
+      tags: [文件]
+      summary: 重命名
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uri, new_name]
+              properties:
+                uri:
+                  type: string
+                new_name:
+                  type: string
+                  minLength: 1
+                  maxLength: 255
+      responses:
+        '200':
+          description: 重命名后的文件
+
+  /file/move:
+    post:
+      tags: [文件]
+      summary: 移动或复制文件
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uris, dst]
+              properties:
+                uris:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: string
+                dst:
+                  type: string
+                  description: 目标目录 URI
+                copy:
+                  type: boolean
+      responses:
+        '200':
+          description: OK
+
+  /file/url:
+    post:
+      tags: [文件]
+      summary: 获取下载/预览 URL
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uris]
+              properties:
+                uris:
+                  type: array
+                  items:
+                    type: string
+                download:
+                  type: boolean
+                redirect:
+                  type: boolean
+                  description: 302 重定向（仅 URI 数量=1）
+                entity:
+                  type: string
+                  description: 指定 Entity ID
+                use_primary_site_url:
+                  type: boolean
+                skip_error:
+                  type: boolean
+                archive:
+                  type: boolean
+                  description: 打包下载
+                no_cache:
+                  type: boolean
+      responses:
+        '200':
+          description: 临时下载 URL
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Response'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/FileURLResponse'
+
+  /file/content/{id}/{speed}/{name}:
+    get:
+      tags: [文件]
+      summary: 下载/预览文件内容（需 URL 签名）
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: HashID 编码的 Entity ID
+        - in: path
+          name: speed
+          required: true
+          schema:
+            type: string
+          description: 速度限制（0=不限）
+        - in: path
+          name: name
+          required: true
+          schema:
+            type: string
+          description: 文件名
+      responses:
+        '200':
+          description: 文件二进制流
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+
+  /file/thumb:
+    get:
+      tags: [文件]
+      summary: 获取缩略图 URL
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: uri
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 缩略图 URL
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Response'
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          url:
+                            type: string
+                            format: url
+                          expires:
+                            type: string
+                            format: date-time
+
+  /file/restore:
+    post:
+      tags: [文件]
+      summary: 从回收站恢复
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uris]
+              properties:
+                uris:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: OK
+
+  /file/trash:
+    delete:
+      tags: [文件]
+      summary: 清空回收站
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: OK
+
+  /file/search:
+    get:
+      tags: [文件]
+      summary: 全文搜索
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: query
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: offset
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 搜索结果
+
+  # ============ 文件上传 ============
+  /file/upload:
+    put:
+      tags: [上传]
+      summary: 创建上传会话
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uri, size]
+              properties:
+                uri:
+                  type: string
+                  description: 目标文件 URI
+                size:
+                  type: integer
+                  format: int64
+                  description: 文件大小（字节）
+                last_modified:
+                  type: integer
+                  format: int64
+                mime_type:
+                  type: string
+                policy_id:
+                  type: string
+                  description: 存储策略 HashID
+                metadata:
+                  type: object
+                  additionalProperties:
+                    type: string
+                entity_type:
+                  type: string
+                  enum: ["", live_photo, version]
+      responses:
+        '200':
+          description: 上传会话信息
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Response'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/UploadSessionResponse'
+
+    delete:
+      tags: [上传]
+      summary: 取消上传会话
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, uri]
+              properties:
+                id:
+                  type: string
+                  description: 会话 ID
+                uri:
+                  type: string
+      responses:
+        '200':
+          description: OK
+
+  /file/upload/{sessionId}/{index}:
+    post:
+      tags: [上传]
+      summary: 上传分片
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: index
+          required: true
+          schema:
+            type: integer
+          description: 分片序号（从 0 开始）
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: OK
+        '40013':
+          description: Content-Length 与预期不符
+
+  # ============ 直链 ============
+  /file/source:
+    put:
+      tags: [直链]
+      summary: 获取永久直链
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uris]
+              properties:
+                uris:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: 直链列表
+
+  /file/source/{id}:
+    delete:
+      tags: [直链]
+      summary: 删除永久直链
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+
+  # ============ 分享 ============
+  /share:
+    put:
+      tags: [分享]
+      summary: 创建分享链接
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uri]
+              properties:
+                uri:
+                  type: string
+                is_private:
+                  type: boolean
+                password:
+                  type: string
+                  maxLength: 32
+                  pattern: "^[a-zA-Z0-9]*$"
+                downloads:
+                  type: integer
+                  description: 剩余下载次数，0=不限
+                expire:
+                  type: integer
+                  description: 有效期（秒），0=永不过期
+                share_view:
+                  type: boolean
+                show_readme:
+                  type: boolean
+      responses:
+        '200':
+          description: 分享 URL
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Response'
+                  - properties:
+                      data:
+                        type: string
+
+    get:
+      tags: [分享]
+      summary: 列出我的分享
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 分享列表
+
+    delete:
+      tags: [分享]
+      summary: 批量删除分享
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: OK
+
+  /share/{id}:
+    get:
+      tags: [分享]
+      summary: 获取分享信息
+      security: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 分享详情
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Response'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/Share'
+
+    post:
+      tags: [分享]
+      summary: 编辑分享链接
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uri]
+              properties:
+                uri:
+                  type: string
+                password:
+                  type: string
+                expire:
+                  type: integer
+                downloads:
+                  type: integer
+      responses:
+        '200':
+          description: OK
+
+    delete:
+      tags: [分享]
+      summary: 删除单个分享
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+
+  /s/{id}:
+    get:
+      tags: [分享]
+      summary: 短链接重定向
+      security: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '302':
+          description: 重定向到分享页面
+
+  /s/{id}/{password}:
+    get:
+      tags: [分享]
+      summary: 带密码的短链接
+      security: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: password
+          required: true
+          schema:
+            type: string
+      responses:
+        '302':
+          description: 重定向
+
+  # ============ 工作流 ============
+  /workflow:
+    get:
+      tags: [工作流]
+      summary: 列出任务
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 任务列表
+
+  /workflow/progress/{id}:
+    get:
+      tags: [工作流]
+      summary: 获取任务进度
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 任务进度
+
+  /workflow/archive:
+    post:
+      tags: [工作流]
+      summary: 创建压缩任务
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uris]
+              properties:
+                uris:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: OK
+
+  /workflow/extract:
+    post:
+      tags: [工作流]
+      summary: 创建解压任务
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uris]
+              properties:
+                uris:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: OK
+
+  /workflow/download:
+    post:
+      tags: [工作流]
+      summary: 创建离线下载任务
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                urls:
+                  type: array
+                  items:
+                    type: string
+                policy_id:
+                  type: string
+                dst:
+                  type: string
+      responses:
+        '200':
+          description: OK
+
+  /workflow/download/{id}:
+    patch:
+      tags: [工作流]
+      summary: 设置离线下载目标
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: OK
+    delete:
+      tags: [工作流]
+      summary: 取消离线下载
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+
+  # ============ WebDAV 设备 ============
+  /auth/devices/dav:
+    get:
+      tags: [WebDAV]
+      summary: 列出 WebDAV 账号
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: WebDAV 账号列表
+    put:
+      tags: [WebDAV]
+      summary: 创建 WebDAV 账号
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, password]
+              properties:
+                name:
+                  type: string
+                password:
+                  type: string
+                path:
+                  type: string
+      responses:
+        '200':
+          description: OK
+
+  /auth/devices/dav/{id}:
+    patch:
+      tags: [WebDAV]
+      summary: 更新 WebDAV 账号
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: OK
+    delete:
+      tags: [WebDAV]
+      summary: 删除 WebDAV 账号
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+
+  # ============ 管理后台 ============
+  /auth/admin/summary:
+    get:
+      tags: [管理后台]
+      summary: 站点概览统计
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 站点概览数据
+
+  /auth/admin/settings:
+    post:
+      tags: [管理后台]
+      summary: 获取系统设置
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                keys:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: 系统设置
+    patch:
+      tags: [管理后台]
+      summary: 修改系统设置
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: OK
+
+  /auth/admin/user:
+    post:
+      tags: [管理后台]
+      summary: 列出用户
+      security:
+        - BearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                page:
+                  type: integer
+                page_size:
+                  type: integer
+                order:
+                  type: string
+                order_direction:
+                  type: string
+                conditions:
+                  type: object
+      responses:
+        '200':
+          description: 用户列表
+    put:
+      tags: [管理后台]
+      summary: 创建用户
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                nick:
+                  type: string
+                password:
+                  type: string
+                group_id:
+                  type: string
+      responses:
+        '200':
+          description: OK
+
+  /auth/admin/user/{id}:
+    get:
+      tags: [管理后台]
+      summary: 获取用户详情
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 用户详情
+    put:
+      tags: [管理后台]
+      summary: 更新用户
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: OK
+
+  /auth/admin/policy:
+    post:
+      tags: [管理后台]
+      summary: 列出存储策略
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 策略列表
+    put:
+      tags: [管理后台]
+      summary: 创建存储策略
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: OK
+
+  /auth/admin/policy/{id}:
+    get:
+      tags: [管理后台]
+      summary: 获取存储策略详情
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 策略详情
+    put:
+      tags: [管理后台]
+      summary: 更新存储策略
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: OK
+    delete:
+      tags: [管理后台]
+      summary: 删除存储策略
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+
+  /auth/admin/node:
+    post:
+      tags: [管理后台]
+      summary: 列出节点
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 节点列表
+    put:
+      tags: [管理后台]
+      summary: 创建节点
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                master_url:
+                  type: string
+                node_key:
+                  type: string
+      responses:
+        '200':
+          description: OK
+
+  /auth/admin/node/{id}:
+    get:
+      tags: [管理后台]
+      summary: 获取节点
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 节点详情
+    put:
+      tags: [管理后台]
+      summary: 更新节点
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: OK
+    delete:
+      tags: [管理后台]
+      summary: 删除节点
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+
+  /auth/admin/group:
+    post:
+      tags: [管理后台]
+      summary: 列出用户组
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 用户组列表
+    put:
+      tags: [管理后台]
+      summary: 创建用户组
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: OK
+
+  /auth/admin/group/{id}:
+    get:
+      tags: [管理后台]
+      summary: 获取用户组
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 用户组详情
+    put:
+      tags: [管理后台]
+      summary: 更新用户组
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: OK
+    delete:
+      tags: [管理后台]
+      summary: 删除用户组
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+
+  /auth/admin/queue/metrics:
+    get:
+      tags: [管理后台]
+      summary: 队列指标
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 队列指标数据
+
+  /auth/admin/file:
+    post:
+      tags: [管理后台]
+      summary: 列出文件（管理视角）
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 文件列表
+
+  /auth/admin/file/{id}:
+    get:
+      tags: [管理后台]
+      summary: 获取文件详情
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 文件详情
+    put:
+      tags: [管理后台]
+      summary: 更新文件
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: OK
+
+  /auth/admin/share:
+    post:
+      tags: [管理后台]
+      summary: 列出分享
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: 分享列表
+
+  /auth/admin/share/{id}:
+    get:
+      tags: [管理后台]
+      summary: 获取分享详情
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 分享详情
+
+  /auth/admin/share/{id}:
+    delete:
+      tags: [管理后台]
+      summary: 删除分享
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+
+tags:
+  - name: 站点
+    description: 公开健康检查和配置
+  - name: 鉴权
+    description: 登录、Token、WebAuthn
+  - name: 用户
+    description: 用户注册、重置、个人信息
+  - name: 文件
+    description: 文件/目录 CRUD、下载、预览
+  - name: 上传
+    description: 分片上传
+  - name: 直链
+    description: 永久直链
+  - name: 分享
+    description: 分享链接
+  - name: 工作流
+    description: 压缩、解压、离线下载
+  - name: WebDAV
+    description: WebDAV 账号管理
+  - name: 管理后台
+    description: 管理员专用接口
