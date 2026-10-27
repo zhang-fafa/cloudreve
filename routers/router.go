@@ -610,6 +610,16 @@ func initMasterRouter(dep dependency.Dep) *gin.Engine {
 				controllers.FromQuery[explorer.ListFileService](explorer.ListFileParameterCtx{}),
 				controllers.ListDirectory,
 			)
+			// List files with pagination, each item carries its temporary url
+			file.GET("list",
+				controllers.FromQuery[explorer.ListFileUrlService](explorer.ListFileUrlParameterCtx{}),
+				controllers.ListFileUrls,
+			)
+			// Randomly recommend files, each item carries its temporary url
+			file.GET("recommend",
+				controllers.FromQuery[explorer.FileRecommendService](explorer.FileRecommendParameterCtx{}),
+				controllers.RecommendFiles,
+			)
 			file.GET("archive",
 				controllers.FromQuery[explorer.ArchiveListFilesService](explorer.ArchiveListFilesParamCtx{}),
 				controllers.ListArchiveFiles,

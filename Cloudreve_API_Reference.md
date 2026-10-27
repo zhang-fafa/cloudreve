@@ -848,6 +848,118 @@ POST /api/v4/file/url
 }
 ```
 
+#### 4.9.1 分页文件列表（每项附带下载 URL）
+
+```
+GET /api/v4/file/list?uri=cloudreve://my/&page=1&page_size=50&order_by=name&order_direction=asc
+```
+
+**鉴权**：Token + `Files.Read`
+
+分页列出目录内容，行为与 4.1 一致，但每个文件类型的 item 额外附带与 4.9 相同格式的临时下载/预览 URL，适合客户端一次请求即可展示列表并播放/下载，无需再逐个调用 `/file/url`。
+
+**Query 参数**：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `uri` | string | ✅ | 目录 URI，根目录为 `cloudreve://my/` |
+| `page` | int | ❌ | 页码，默认 0 |
+| `page_size` | int | ❌ | 每页数量 |
+| `order_by` | string | ❌ | 排序字段 |
+| `order_direction` | string | ❌ | `asc` / `desc` |
+| `next_page_token` | string | ❌ | 分页 token |
+| `download` | bool | ❌ | 下载模式（影响 Content-Disposition），默认 false 为预览模式 |
+| `no_cache` | bool | ❌ | 不使用 URL 缓存 |
+
+**响应**：
+```json
+{
+  "code": 0,
+  "data": {
+    "files": [
+      {
+        "type": 0,
+        "id": "abc123",
+        "name": "document.pdf",
+        "created_at": "2026-10-27T10:00:00Z",
+        "updated_at": "2026-10-27T10:00:00Z",
+        "size": 10240,
+        "metadata": {},
+        "path": "cloudreve://my/document.pdf",
+        "owned": true,
+        "urls": [
+          {
+            "url": "https://cdn.example.com/path/to/file?sign=xxx",
+            "stream_saver_display_name": ""
+          }
+        ]
+      },
+      {
+        "type": 1,
+        "id": "def456",
+        "name": "docs",
+        "size": 0
+      }
+    ],
+    "pagination": { "total": 100, "page": 1, "page_size": 50 },
+    "expires": "2026-10-27T12:00:00Z"
+  }
+}
+```
+
+**响应字段说明**：
+
+| 字段 | 说明 |
+|------|------|
+| `files[].urls` | 仅文件类型（`type=0`）附带；目录（`type=1`）无此字段。单个文件取 URL 失败时该项不带 `urls`，不影响整页 |
+| `expires` | 本页所有 URL 中最早的过期时间 |
+
+#### 4.9.2 随机推荐文件
+
+```
+GET /api/v4/file/recommend?uri=cloudreve://my/&count=10&download=false
+```
+
+**鉴权**：Token + `Files.Read`
+
+从指定目录中随机抽取文件返回，item 结构与 4.9.1 完全一致（文件信息 + `urls`）。仅返回文件类型，目录不会被推荐。每次请求结果随机，适合作"猜你喜欢 / 随机播放"等场景。
+
+**Query 参数**：
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `uri` | string | ✅ | 推荐来源目录 URI，根目录为 `cloudreve://my/` |
+| `count` | int | ❌ | 推荐数量，默认 10 |
+| `download` | bool | ❌ | 下载模式（影响 Content-Disposition），默认 false 为预览模式 |
+| `no_cache` | bool | ❌ | 不使用 URL 缓存 |
+
+**响应**：
+```json
+{
+  "code": 0,
+  "data": {
+    "files": [
+      {
+        "type": 0,
+        "id": "abc123",
+        "name": "video.mp4",
+        "created_at": "2026-10-27T10:00:00Z",
+        "size": 10240,
+        "path": "cloudreve://my/video.mp4",
+        "urls": [
+          {
+            "url": "https://cdn.example.com/path/to/file?sign=xxx"
+          }
+        ]
+      }
+    ],
+    "expires": "2026-10-27T12:00:00Z"
+  }
+}
+```
+
+**说明**：实现上先按默认排序取一个较大的候选集（`count × 5`，上限为导航器最大页大小），再打乱并截取 `count` 个。因此随机范围是该目录排序靠前的候选集；目录内文件不足时返回全部文件。
+
 #### 4.10 下载/预览文件内容
 
 ```

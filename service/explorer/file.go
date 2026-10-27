@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/gob"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"time"
 
 	"github.com/cloudreve/Cloudreve/v4/application/dependency"
+	"github.com/cloudreve/Cloudreve/v4/ent"
 	"github.com/cloudreve/Cloudreve/v4/inventory"
 	"github.com/cloudreve/Cloudreve/v4/inventory/types"
 	"github.com/cloudreve/Cloudreve/v4/pkg/auth"
+	"github.com/cloudreve/Cloudreve/v4/pkg/boolset"
 	"github.com/cloudreve/Cloudreve/v4/pkg/cluster/routes"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs"
 	"github.com/cloudreve/Cloudreve/v4/pkg/filemanager/fs/dbfs"
@@ -203,6 +206,185 @@ func (service *ListFileService) List(c *gin.Context) (*ListResponse, error) {
 	}
 
 	return listResponse, nil
+}
+
+type (
+	// ListFileUrlParameterCtx define key for ListFileUrlService
+	ListFileUrlParameterCtx struct{}
+
+	// ListFileUrlService 分页列出文件，并为每个文件项附带临时下载/预览 URL
+	ListFileUrlService struct {
+		Uri            string `uri:"uri" form:"uri" json:"uri" binding:"required"`
+		Page           int    `uri:"page" form:"page" json:"page" binding:"min=0"`
+		PageSize       int    `uri:"page_size" form:"page_size" json:"page_size"`
+		OrderBy        string `uri:"order_by" form:"order_by" json:"order_by"`
+		OrderDirection string `uri:"order_direction" form:"order_direction" json:"order_direction"`
+		NextPageToken  string `uri:"next_page_token" form:"next_page_token" json:"next_page_token"`
+		Download       bool   `uri:"download" form:"download" json:"download"`
+		NoCache        bool   `uri:"no_cache" form:"no_cache" json:"no_cache"`
+	}
+)
+
+// FileWithUrlResponse 文件列表项，在文件信息基础上附带临时 URL（参考 FileURLService 的返回）
+type FileWithUrlResponse struct {
+	FileResponse
+	Urls []manager.EntityUrl `json:"urls,omitempty"`
+}
+
+type ListFileUrlResponse struct {
+	Files      []FileWithUrlResponse        `json:"files"`
+	Pagination *inventory.PaginationResults `json:"pagination"`
+	Expires    *time.Time                   `json:"expires"`
+}
+
+// buildFilesWithUrls 将文件列表转换为附带临时 URL 的列表项，同时返回所有 URL 中最早的过期时间。
+func buildFilesWithUrls(
+	c *gin.Context,
+	m manager.FileManager,
+	user *ent.User,
+	hasher hashid.Encoder,
+	files []fs.File,
+	capability *boolset.BooleanSet,
+	download bool,
+	noCache bool,
+) ([]FileWithUrlResponse, *time.Time) {
+	items := make([]FileWithUrlResponse, 0, len(files))
+	urlArgs := make([]manager.GetEntityUrlArgs, 0, len(files))
+	itemIndex := make([]int, 0, len(files))
+	for i, f := range files {
+		items = append(items, FileWithUrlResponse{
+			FileResponse: *BuildFileResponse(c, user, f, hasher, capability),
+		})
+		if f.Type() == types.FileTypeFile {
+			urlArgs = append(urlArgs, manager.GetEntityUrlArgs{URI: f.Uri(false)})
+			itemIndex = append(itemIndex, i)
+		}
+	}
+
+	if len(urlArgs) == 0 {
+		return items, nil
+	}
+
+	expire := time.Now().Add(dependency.FromContext(c).SettingProvider().EntityUrlValidDuration(c))
+	urls, earliest, err := m.GetEntityUrls(c, urlArgs,
+		fs.WithDownloadSpeed(int64(user.Edges.Group.SpeedLimit)),
+		fs.WithIsDownload(download),
+		fs.WithNoCache(noCache),
+		fs.WithUrlExpire(&expire),
+	)
+	// 单个文件取 URL 失败时对应项为空值，跳过而不影响其余结果
+	if err != nil {
+		return items, nil
+	}
+
+	for j, u := range urls {
+		if u.Url != "" {
+			items[itemIndex[j]].Urls = []manager.EntityUrl{u}
+		}
+	}
+
+	return items, earliest
+}
+
+// List all files for given path, each file item carries its temporary url.
+func (service *ListFileUrlService) List(c *gin.Context) (*ListFileUrlResponse, error) {
+	dep := dependency.FromContext(c)
+	user := inventory.UserFromContext(c)
+	m := manager.NewFileManager(dep, user)
+	defer m.Recycle()
+
+	uri, err := fs.NewUriFromString(service.Uri)
+	if err != nil {
+		return nil, serializer.NewError(serializer.CodeParamErr, "unknown uri", err)
+	}
+
+	_, res, err := m.List(c, uri, &manager.ListArgs{
+		Page:           service.Page,
+		PageSize:       service.PageSize,
+		Order:          service.OrderBy,
+		OrderDirection: service.OrderDirection,
+		PageToken:      service.NextPageToken,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	items, expires := buildFilesWithUrls(c, m, user, dep.HashIDEncoder(), res.Files,
+		res.Props.Capability, service.Download, service.NoCache)
+
+	return &ListFileUrlResponse{
+		Files:      items,
+		Pagination: res.Pagination,
+		Expires:    expires,
+	}, nil
+}
+
+type (
+	// FileRecommendParameterCtx define key for FileRecommendService
+	FileRecommendParameterCtx struct{}
+
+	// FileRecommendService 从指定目录中随机推荐若干文件，每项附带临时下载/预览 URL
+	FileRecommendService struct {
+		Uri      string `uri:"uri" form:"uri" json:"uri" binding:"required"`
+		Count    int    `uri:"count" form:"count" json:"count" binding:"min=0"`
+		Download bool   `uri:"download" form:"download" json:"download"`
+		NoCache  bool   `uri:"no_cache" form:"no_cache" json:"no_cache"`
+	}
+	FileRecommendResponse struct {
+		Files   []FileWithUrlResponse `json:"files"`
+		Expires *time.Time            `json:"expires"`
+	}
+)
+
+const (
+	// defaultRecommendCount 未指定 count 时的默认推荐数量
+	defaultRecommendCount = 10
+	// recommendCandidateFactor 候选集相对推荐数量的倍数，候选集越大随机性越好
+	recommendCandidateFactor = 5
+)
+
+// Recommend 从指定目录中随机抽取文件推荐，只返回文件类型，不包含目录。
+func (service *FileRecommendService) Recommend(c *gin.Context) (*FileRecommendResponse, error) {
+	dep := dependency.FromContext(c)
+	user := inventory.UserFromContext(c)
+	m := manager.NewFileManager(dep, user)
+	defer m.Recycle()
+
+	uri, err := fs.NewUriFromString(service.Uri)
+	if err != nil {
+		return nil, serializer.NewError(serializer.CodeParamErr, "unknown uri", err)
+	}
+
+	count := service.Count
+	if count <= 0 {
+		count = defaultRecommendCount
+	}
+
+	// 先取一个较大的候选集，再从中随机抽样，保证每次请求返回不同内容。
+	// 候选集会由底层按导航器的最大页大小自动截断。
+	_, res, err := m.List(c, uri, &manager.ListArgs{PageSize: count * recommendCandidateFactor})
+	if err != nil {
+		return nil, err
+	}
+
+	files := lo.Filter(res.Files, func(f fs.File, _ int) bool {
+		return f.Type() == types.FileTypeFile
+	})
+	if len(files) == 0 {
+		return &FileRecommendResponse{Files: []FileWithUrlResponse{}}, nil
+	}
+
+	rand.Shuffle(len(files), func(i, j int) {
+		files[i], files[j] = files[j], files[i]
+	})
+	if len(files) > count {
+		files = files[:count]
+	}
+
+	items, expires := buildFilesWithUrls(c, m, user, dep.HashIDEncoder(), files,
+		res.Props.Capability, service.Download, service.NoCache)
+
+	return &FileRecommendResponse{Files: items, Expires: expires}, nil
 }
 
 type (

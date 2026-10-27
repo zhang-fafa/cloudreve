@@ -275,6 +275,56 @@ components:
           type: string
           format: date-time
 
+    FileWithUrlResponse:
+      allOf:
+        - $ref: '#/components/schemas/FileResponse'
+        - type: object
+          properties:
+            urls:
+              type: array
+              description: 临时下载/预览 URL，仅文件类型附带
+              items:
+                type: object
+                properties:
+                  url:
+                    type: string
+                    format: url
+                  stream_saver_display_name:
+                    type: string
+
+    ListFileUrlResponse:
+      type: object
+      properties:
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileWithUrlResponse'
+        pagination:
+          type: object
+          properties:
+            total:
+              type: integer
+            page:
+              type: integer
+            page_size:
+              type: integer
+        expires:
+          type: string
+          format: date-time
+          description: 本页所有 URL 中最早的过期时间
+
+    FileRecommendResponse:
+      type: object
+      properties:
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileWithUrlResponse'
+        expires:
+          type: string
+          format: date-time
+          description: 所有 URL 中最早的过期时间
+
 security:
   - BearerAuth: []
 
@@ -590,7 +640,7 @@ paths:
           description: 头像图片
 
   # ============ 需登录用户信息 ============
-  /auth/user/me:
+  /user/me:
     get:
       tags: [用户]
       summary: 获取当前登录用户信息
@@ -608,7 +658,7 @@ paths:
                       data:
                         $ref: '#/components/schemas/User'
 
-  /auth/user/capacity:
+  /user/capacity:
     get:
       tags: [用户]
       summary: 获取存储容量使用情况
@@ -618,7 +668,7 @@ paths:
         '200':
           description: 存储容量信息
 
-  /auth/user/setting:
+  /user/setting:
     get:
       tags: [用户]
       summary: 获取用户个人设置
@@ -648,7 +698,7 @@ paths:
         '200':
           description: OK
 
-  /auth/user/setting/2fa:
+  /user/setting/2fa:
     get:
       tags: [用户]
       summary: 初始化二步验证
@@ -671,7 +721,10 @@ paths:
           required: true
           schema:
             type: string
-          description: 目录 URI，根目录为 `/`
+          description: |
+            目录 URI，必须使用 `cloudreve://` 协议格式。我的文件根目录为
+            `cloudreve://my/`，子目录如 `cloudreve://my/docs`；分享内容为
+            `cloudreve://s/{share_id}/...`。不能传普通路径（如 `/`）或留空。
         - in: query
           name: page
           schema:
@@ -739,7 +792,7 @@ paths:
           name: uri
           schema:
             type: string
-          description: 文件 URI（与 id 二选一）
+          description: 文件 URI（cloudreve:// 协议格式，如 cloudreve://my/file.txt；与 id 二选一）
         - in: query
           name: id
           schema:
@@ -782,6 +835,7 @@ paths:
               properties:
                 uri:
                   type: string
+                  description: 目标 URI（cloudreve:// 协议格式，如 cloudreve://my/new-folder）
                 type:
                   type: string
                   enum: [file, folder]
@@ -893,6 +947,114 @@ paths:
                   - properties:
                       data:
                         $ref: '#/components/schemas/FileURLResponse'
+
+  /file/list:
+    get:
+      tags: [文件]
+      summary: 分页文件列表（每项附带下载 URL）
+      description: |
+        分页列出目录内容，每个文件类型 item 额外附带与 POST /file/url 相同格式的
+        临时下载/预览 URL。目录类型 item 不带 urls；单个文件取 URL 失败时该项
+        不带 urls，不影响整页。
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: uri
+          required: true
+          schema:
+            type: string
+          description: |
+            目录 URI，必须使用 `cloudreve://` 协议格式。我的文件根目录为
+            `cloudreve://my/`，子目录如 `cloudreve://my/docs`。
+        - in: query
+          name: page
+          schema:
+            type: integer
+            default: 0
+        - in: query
+          name: page_size
+          schema:
+            type: integer
+        - in: query
+          name: order_by
+          schema:
+            type: string
+        - in: query
+          name: order_direction
+          schema:
+            type: string
+            enum: [asc, desc]
+        - in: query
+          name: next_page_token
+          schema:
+            type: string
+        - in: query
+          name: download
+          schema:
+            type: boolean
+          description: 下载模式（影响 Content-Disposition），默认 false 为预览模式
+        - in: query
+          name: no_cache
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: 附带临时 URL 的分页文件列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Response'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/ListFileUrlResponse'
+
+  /file/recommend:
+    get:
+      tags: [文件]
+      summary: 随机推荐文件
+      description: |
+        从指定目录中随机抽取文件返回，item 结构与 /file/list 一致（文件信息 + urls）。
+        仅返回文件类型，目录不会被推荐；每次请求结果随机。实现上先取一个较大的候选集
+        （count × 5，上限为导航器最大页大小），再打乱并截取 count 个。
+      security:
+        - BearerAuth: []
+      parameters:
+        - in: query
+          name: uri
+          required: true
+          schema:
+            type: string
+          description: |
+            推荐来源目录 URI，必须使用 `cloudreve://` 协议格式。我的文件根目录为
+            `cloudreve://my/`。
+        - in: query
+          name: count
+          schema:
+            type: integer
+            default: 10
+          description: 推荐数量，默认 10
+        - in: query
+          name: download
+          schema:
+            type: boolean
+          description: 下载模式（影响 Content-Disposition），默认 false 为预览模式
+        - in: query
+          name: no_cache
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: 随机推荐的文件列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Response'
+                  - properties:
+                      data:
+                        $ref: '#/components/schemas/FileRecommendResponse'
 
   /file/content/{id}/{speed}/{name}:
     get:
@@ -1461,7 +1623,7 @@ paths:
           description: OK
 
   # ============ WebDAV 设备 ============
-  /auth/devices/dav:
+  /devices/dav:
     get:
       tags: [WebDAV]
       summary: 列出 WebDAV 账号
@@ -1493,7 +1655,7 @@ paths:
         '200':
           description: OK
 
-  /auth/devices/dav/{id}:
+  /devices/dav/{id}:
     patch:
       tags: [WebDAV]
       summary: 更新 WebDAV 账号
@@ -1535,7 +1697,7 @@ paths:
           description: OK
 
   # ============ 管理后台 ============
-  /auth/admin/summary:
+  /admin/summary:
     get:
       tags: [管理后台]
       summary: 站点概览统计
@@ -1545,7 +1707,7 @@ paths:
         '200':
           description: 站点概览数据
 
-  /auth/admin/settings:
+  /admin/settings:
     post:
       tags: [管理后台]
       summary: 获取系统设置
@@ -1581,7 +1743,7 @@ paths:
         '200':
           description: OK
 
-  /auth/admin/user:
+  /admin/user:
     post:
       tags: [管理后台]
       summary: 列出用户
@@ -1631,7 +1793,7 @@ paths:
         '200':
           description: OK
 
-  /auth/admin/user/{id}:
+  /admin/user/{id}:
     get:
       tags: [管理后台]
       summary: 获取用户详情
@@ -1667,7 +1829,7 @@ paths:
         '200':
           description: OK
 
-  /auth/admin/policy:
+  /admin/policy:
     post:
       tags: [管理后台]
       summary: 列出存储策略
@@ -1691,7 +1853,7 @@ paths:
         '200':
           description: OK
 
-  /auth/admin/policy/{id}:
+  /admin/policy/{id}:
     get:
       tags: [管理后台]
       summary: 获取存储策略详情
@@ -1741,7 +1903,7 @@ paths:
         '200':
           description: OK
 
-  /auth/admin/node:
+  /admin/node:
     post:
       tags: [管理后台]
       summary: 列出节点
@@ -1772,7 +1934,7 @@ paths:
         '200':
           description: OK
 
-  /auth/admin/node/{id}:
+  /admin/node/{id}:
     get:
       tags: [管理后台]
       summary: 获取节点
@@ -1822,7 +1984,7 @@ paths:
         '200':
           description: OK
 
-  /auth/admin/group:
+  /admin/group:
     post:
       tags: [管理后台]
       summary: 列出用户组
@@ -1846,7 +2008,7 @@ paths:
         '200':
           description: OK
 
-  /auth/admin/group/{id}:
+  /admin/group/{id}:
     get:
       tags: [管理后台]
       summary: 获取用户组
@@ -1896,7 +2058,7 @@ paths:
         '200':
           description: OK
 
-  /auth/admin/queue/metrics:
+  /admin/queue/metrics:
     get:
       tags: [管理后台]
       summary: 队列指标
@@ -1906,7 +2068,7 @@ paths:
         '200':
           description: 队列指标数据
 
-  /auth/admin/file:
+  /admin/file:
     post:
       tags: [管理后台]
       summary: 列出文件（管理视角）
@@ -1916,7 +2078,7 @@ paths:
         '200':
           description: 文件列表
 
-  /auth/admin/file/{id}:
+  /admin/file/{id}:
     get:
       tags: [管理后台]
       summary: 获取文件详情
@@ -1952,7 +2114,7 @@ paths:
         '200':
           description: OK
 
-  /auth/admin/share:
+  /admin/share:
     post:
       tags: [管理后台]
       summary: 列出分享
@@ -1962,7 +2124,7 @@ paths:
         '200':
           description: 分享列表
 
-  /auth/admin/share/{id}:
+  /admin/share/{id}:
     get:
       tags: [管理后台]
       summary: 获取分享详情
@@ -1978,7 +2140,7 @@ paths:
         '200':
           description: 分享详情
 
-  /auth/admin/share/{id}:
+  /admin/share/{id}:
     delete:
       tags: [管理后台]
       summary: 删除分享

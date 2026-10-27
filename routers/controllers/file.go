@@ -173,6 +173,32 @@ func FileURL(c *gin.Context) {
 	}
 }
 
+// ListFileUrls paginated file list, each item carries its temporary url
+func ListFileUrls(c *gin.Context) {
+	service := ParametersFromContext[*explorer.ListFileUrlService](c, explorer.ListFileUrlParameterCtx{})
+	resp, err := service.List(c)
+	if err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		c.Abort()
+		return
+	}
+
+	c.JSON(200, serializer.Response{Data: resp})
+}
+
+// RecommendFiles randomly recommend files from given directory, each item carries its temporary url
+func RecommendFiles(c *gin.Context) {
+	service := ParametersFromContext[*explorer.FileRecommendService](c, explorer.FileRecommendParameterCtx{})
+	resp, err := service.Recommend(c)
+	if err != nil {
+		c.JSON(200, serializer.Err(c, err))
+		c.Abort()
+		return
+	}
+
+	c.JSON(200, serializer.Response{Data: resp})
+}
+
 // ServeEntity download entity content
 func ServeEntity(c *gin.Context) {
 	service := ParametersFromContext[*explorer.EntityDownloadService](c, explorer.EntityDownloadParameterCtx{})
