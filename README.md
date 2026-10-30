@@ -74,3 +74,15 @@ If you're interested in contributing to Cloudreve, please refer to [Contributing
 ## :scroll: License
 
 GPL V3
+
+
+run cloudreve
+```bash
+go run . server -c data/conf.ini -w
+```
+or
+
+```bash
+go build -o cloudreve.exe .
+./cloudreve.exe
+```
