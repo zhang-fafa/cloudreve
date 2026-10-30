@@ -27,6 +27,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gofrs/uuid"
 	"github.com/samber/lo"
+	"golang.org/x/tools/container/intsets"
 )
 
 // SingleFileService 对单文件进行操作的五福，path为文件完整路径
@@ -286,7 +287,58 @@ func buildFilesWithUrls(
 	return items, earliest
 }
 
+// collectFolderFiles 递归遍历文件夹，收集其下所有文件（不含目录与符号链接目录）。
+// 单个目录遍历失败（如超出遍历数量限制）时记录日志并跳过，保留已收集的部分结果。
+func collectFolderFiles(
+	ctx context.Context,
+	dep dependency.Dep,
+	m manager.FileManager,
+	folders []fs.File,
+) []fs.File {
+	files := make([]fs.File, 0)
+	for _, folder := range folders {
+		if err := m.Walk(ctx, folder.Uri(false), intsets.MaxInt, func(f fs.File, _ int) error {
+			if f.Type() == types.FileTypeFile && !f.IsSymbolic() {
+				files = append(files, f)
+			}
+			return nil
+		}); err != nil {
+			dep.Logger().Warning("Failed to walk folder %s: %s, skipping it...", folder.Uri(false), err)
+		}
+	}
+
+	return files
+}
+
+// splitFilesAndFolders 将文件列表拆分为直接文件与非符号链接目录。
+func splitFilesAndFolders(files []fs.File) (direct, folders []fs.File) {
+	direct = make([]fs.File, 0, len(files))
+	folders = make([]fs.File, 0, len(files))
+	for _, f := range files {
+		switch {
+		case f.Type() == types.FileTypeFile:
+			direct = append(direct, f)
+		case !f.IsSymbolic():
+			folders = append(folders, f)
+		}
+	}
+
+	return direct, folders
+}
+
+// expandFiles 返回列表中的直接文件，并递归展开其中的目录，结果只包含文件。
+func expandFiles(
+	ctx context.Context,
+	dep dependency.Dep,
+	m manager.FileManager,
+	files []fs.File,
+) []fs.File {
+	direct, folders := splitFilesAndFolders(files)
+	return append(direct, collectFolderFiles(ctx, dep, m, folders)...)
+}
+
 // List all files for given path, each file item carries its temporary url.
+// 目录不会包含在结果中，当前分页内的目录会被递归展开为其下所有文件。
 func (service *ListFileUrlService) List(c *gin.Context) (*ListFileUrlResponse, error) {
 	dep := dependency.FromContext(c)
 	user := inventory.UserFromContext(c)
@@ -309,7 +361,9 @@ func (service *ListFileUrlService) List(c *gin.Context) (*ListFileUrlResponse, e
 		return nil, err
 	}
 
-	items, expires := buildFilesWithUrls(c, m, user, dep.HashIDEncoder(), res.Files,
+	files := expandFiles(c, dep, m, res.Files)
+
+	items, expires := buildFilesWithUrls(c, m, user, dep.HashIDEncoder(), files,
 		res.Props.Capability, service.Download, service.NoCache)
 
 	return &ListFileUrlResponse{
@@ -361,15 +415,13 @@ func (service *FileRecommendService) Recommend(c *gin.Context) (*FileRecommendRe
 	}
 
 	// 先取一个较大的候选集，再从中随机抽样，保证每次请求返回不同内容。
-	// 候选集会由底层按导航器的最大页大小自动截断。
+	// 候选集会由底层按导航器的最大页大小自动截断；其中的目录会被递归展开，只保留文件。
 	_, res, err := m.List(c, uri, &manager.ListArgs{PageSize: count * recommendCandidateFactor})
 	if err != nil {
 		return nil, err
 	}
 
-	files := lo.Filter(res.Files, func(f fs.File, _ int) bool {
-		return f.Type() == types.FileTypeFile
-	})
+	files := expandFiles(c, dep, m, res.Files)
 	if len(files) == 0 {
 		return &FileRecommendResponse{Files: []FileWithUrlResponse{}}, nil
 	}

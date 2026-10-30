@@ -953,9 +953,11 @@ paths:
       tags: [文件]
       summary: 分页文件列表（每项附带下载 URL）
       description: |
-        分页列出目录内容，每个文件类型 item 额外附带与 POST /file/url 相同格式的
-        临时下载/预览 URL。目录类型 item 不带 urls；单个文件取 URL 失败时该项
-        不带 urls，不影响整页。
+        分页列出目录内容，仅返回文件（不返回目录）。当前分页内的目录会被递归展开为
+        其下所有层级的文件，一并返回。每个文件 item 额外附带与 POST /file/url 相同
+        格式的临时下载/预览 URL；单个文件取 URL 失败时该项不带 urls，不影响整页。
+        pagination 反映目录顶层条目（文件 + 目录）的分页信息，因此返回的 files 数量
+        可能超过 page_size。单个目录遍历失败时跳过该目录，不影响其余结果。
       security:
         - BearerAuth: []
       parameters:
@@ -1016,8 +1018,9 @@ paths:
       summary: 随机推荐文件
       description: |
         从指定目录中随机抽取文件返回，item 结构与 /file/list 一致（文件信息 + urls）。
-        仅返回文件类型，目录不会被推荐；每次请求结果随机。实现上先取一个较大的候选集
-        （count × 5，上限为导航器最大页大小），再打乱并截取 count 个。
+        仅返回文件类型：候选集中出现的目录会被递归展开为其下所有层级的文件，再与
+        直接文件一起随机抽取；每次请求结果随机。实现上先取一个较大的候选集
+        （count × 5，上限为导航器最大页大小）并递归展开目录，再打乱并截取 count 个。
       security:
         - BearerAuth: []
       parameters:

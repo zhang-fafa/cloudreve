@@ -13,6 +13,7 @@ type Setting struct {
 func (Setting) Fields() []ent.Field {
 	return []ent.Field{
 		field.String("name").
+			MaxLen(191).
 			Unique(),
 		field.Text("value").
 			Optional(),

@@ -856,7 +856,9 @@ GET /api/v4/file/list?uri=cloudreve://my/&page=1&page_size=50&order_by=name&orde
 
 **鉴权**：Token + `Files.Read`
 
-分页列出目录内容，行为与 4.1 一致，但每个文件类型的 item 额外附带与 4.9 相同格式的临时下载/预览 URL，适合客户端一次请求即可展示列表并播放/下载，无需再逐个调用 `/file/url`。
+分页列出目录内容，行为与 4.1 一致，但只返回文件（`type=0`），不返回目录。当前分页内出现的目录会被递归展开，其下所有层级的文件一并返回；每个文件类型的 item 额外附带与 4.9 相同格式的临时下载/预览 URL，适合客户端一次请求即可展示列表并播放/下载，无需再逐个调用 `/file/url`。
+
+> 注意：`pagination` 反映的是目录顶层条目（文件 + 目录）的分页信息；由于目录会被递归展开，响应中 `files` 的实际数量可能超过 `page_size`。单个目录遍历失败（例如超过用户组允许遍历的最大文件数）时跳过该目录，不影响整页其余结果。
 
 **Query 参数**：
 
@@ -895,10 +897,21 @@ GET /api/v4/file/list?uri=cloudreve://my/&page=1&page_size=50&order_by=name&orde
         ]
       },
       {
-        "type": 1,
+        "type": 0,
         "id": "def456",
-        "name": "docs",
-        "size": 0
+        "name": "readme.md",
+        "created_at": "2026-10-27T10:00:00Z",
+        "updated_at": "2026-10-27T10:00:00Z",
+        "size": 2048,
+        "metadata": {},
+        "path": "cloudreve://my/docs/readme.md",
+        "owned": true,
+        "urls": [
+          {
+            "url": "https://cdn.example.com/path/to/file?sign=xxx",
+            "stream_saver_display_name": ""
+          }
+        ]
       }
     ],
     "pagination": { "total": 100, "page": 1, "page_size": 50 },
@@ -911,7 +924,7 @@ GET /api/v4/file/list?uri=cloudreve://my/&page=1&page_size=50&order_by=name&orde
 
 | 字段 | 说明 |
 |------|------|
-| `files[].urls` | 仅文件类型（`type=0`）附带；目录（`type=1`）无此字段。单个文件取 URL 失败时该项不带 `urls`，不影响整页 |
+| `files[].urls` | 每个文件均附带；单个文件取 URL 失败时该项不带 `urls`，不影响整页。目录不会出现在 `files` 中，其中的文件以递归展开后的完整 `path` 返回 |
 | `expires` | 本页所有 URL 中最早的过期时间 |
 
 #### 4.9.2 随机推荐文件
@@ -922,7 +935,7 @@ GET /api/v4/file/recommend?uri=cloudreve://my/&count=10&download=false
 
 **鉴权**：Token + `Files.Read`
 
-从指定目录中随机抽取文件返回，item 结构与 4.9.1 完全一致（文件信息 + `urls`）。仅返回文件类型，目录不会被推荐。每次请求结果随机，适合作"猜你喜欢 / 随机播放"等场景。
+从指定目录中随机抽取文件返回，item 结构与 4.9.1 完全一致（文件信息 + `urls`）。仅返回文件类型，目录不会被推荐：候选集中出现的目录会被递归展开为其下所有层级的文件，再与直接文件一起随机抽取。每次请求结果随机，适合作"猜你喜欢 / 随机播放"等场景。
 
 **Query 参数**：
 
@@ -958,7 +971,7 @@ GET /api/v4/file/recommend?uri=cloudreve://my/&count=10&download=false
 }
 ```
 
-**说明**：实现上先按默认排序取一个较大的候选集（`count × 5`，上限为导航器最大页大小），再打乱并截取 `count` 个。因此随机范围是该目录排序靠前的候选集；目录内文件不足时返回全部文件。
+**说明**：实现上先按默认排序取一个较大的候选集（`count × 5`，上限为导航器最大页大小），其中的目录递归展开后，再打乱并截取 `count` 个。因此随机范围是该目录排序靠前的候选集；目录内文件不足时返回全部文件。单个目录遍历失败时跳过该目录，不影响其余结果。
 
 #### 4.10 下载/预览文件内容
 
