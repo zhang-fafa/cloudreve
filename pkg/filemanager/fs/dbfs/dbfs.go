@@ -149,6 +149,14 @@ func (f *DBFS) List(ctx context.Context, path *fs.URI, opts ...fs.Option) (fs.Fi
 		orderBy = o.OrderBy
 	}
 
+	// Default ordering: newest first by created_at desc
+	if orderBy == "" {
+		orderBy = "created_at"
+	}
+	if orderDirection == "" {
+		orderDirection = "desc"
+	}
+
 	// Validate pagination args
 	props := navigator.Capabilities(isSearching)
 	if pageSize > props.MaxPageSize {
